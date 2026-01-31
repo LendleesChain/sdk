@@ -1,0 +1,124 @@
+use anchor_lang::prelude::*;
+
+declare_id!("LeNdLeSs111111111111111111111111111111");
+
+#[program]
+pub mod lendless {
+    use super::*;
+
+    pub fn init_user(ctx: Context<InitUser>) -> Result<()> {
+        let user = &mut ctx.accounts.user_account;
+        user.owner = ctx.accounts.owner.key();
+        user.collateral = 0;
+        user.debt = 0;
+        Ok(())
+    }
+
+    pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
+        let user = &mut ctx.accounts.user_account;
+
+        **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? += amount;
+
+        user.collateral += amount;
+        Ok(())
+    }
+
+    pub fn borrow(ctx: Context<Borrow>, amount: u64) -> Result<()> {
+        let user = &mut ctx.accounts.user_account;
+
+        let fee = amount / 100; // 1% one-time fee
+        let total_debt = user.debt + amount + fee;
+
+        // collateral ratio 150%
+        require!(
+            user.collateral * 100 >= total_debt * 150,
+            LendlessError::InsufficientCollateral
+        );
+
+        user.debt = total_debt;
+        Ok(())
+    }
+
+    pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
+        let user = &mut ctx.accounts.user_account;
+        require!(user.debt >= amount, LendlessError::InvalidRepay);
+
+        user.debt -= amount;
+        Ok(())
+    }
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        let user = &mut ctx.accounts.user_account;
+
+        let remaining = user.collateral - amount;
+        require!(
+            remaining * 100 >= user.debt * 150,
+            LendlessError::InsufficientCollateral
+        );
+
+        **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? += amount;
+
+        user.collateral = remaining;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct InitUser<'info> {
+    #[account(init, payer = owner, space = 8 + 32 + 8 + 8)]
+    pub user_account: Account<'info, UserAccount>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct DepositCollateral<'info> {
+    #[account(mut)]
+    pub user_account: Account<'info, UserAccount>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    /// CHECK: protocol vault
+    #[account(mut)]
+    pub vault: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Borrow<'info> {
+    #[account(mut)]
+    pub user_account: Account<'info, UserAccount>,
+}
+
+#[derive(Accounts)]
+pub struct Repay<'info> {
+    #[account(mut)]
+    pub user_account: Account<'info, UserAccount>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(mut)]
+    pub user_account: Account<'info, UserAccount>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    /// CHECK: protocol vault
+    #[account(mut)]
+    pub vault: AccountInfo<'info>,
+}
+
+#[account]
+pub struct UserAccount {
+    pub owner: Pubkey,
+    pub collateral: u64,
+    pub debt: u64,
+}
+
+#[error_code]
+pub enum LendlessError {
+    #[msg("Insufficient collateral")]
+    InsufficientCollateral,
+    #[msg("Invalid repay amount")]
+    InvalidRepay,
+}
