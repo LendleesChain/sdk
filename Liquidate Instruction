@@ -1,0 +1,28 @@
+pub fn liquidate(ctx: Context<Liquidate>, repay_amount: u64) -> Result<()> {
+    let user = &mut ctx.accounts.user;
+
+    let ratio = user.collateral * 100 / user.debt;
+    require!(ratio < 120, ErrorCode::HealthyPosition);
+
+    // burn liquidator stablecoin
+    let cpi = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Burn {
+            mint: ctx.accounts.stable_mint.to_account_info(),
+            from: ctx.accounts.liquidator_token.to_account_info(),
+            authority: ctx.accounts.liquidator.to_account_info(),
+        },
+    );
+    token::burn(cpi, repay_amount)?;
+
+    // collateral bonus 5%
+    let bonus = repay_amount * 105 / 100;
+
+    **ctx.accounts.vault.try_borrow_mut_lamports()? -= bonus;
+    **ctx.accounts.liquidator.try_borrow_mut_lamports()? += bonus;
+
+    user.debt -= repay_amount;
+    user.collateral -= bonus;
+
+    Ok(())
+}
